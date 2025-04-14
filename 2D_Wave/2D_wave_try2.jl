@@ -179,8 +179,10 @@ function sbp_operators(y0::Int, yN::Int, z0::Int, zN::Int,
     return (sparse(kron(D2y_test, Iz)), sparse(kron(Iy, D2z_test)), Iy, Iz, Hy_test, Hz_test, HIy_test, HIz_test, sparse(S0_y+SN_y), sparse(S0_z+SN_z), mu, Ef, Er, Es, Ed)
 end
 
+# Setup SAT Penalty Terms
+# Dirichlet is working for y=0, y=Ny so apply for z=0, z=Nz as well
 function p_f(params, x, t)
-
+    # Dirichlet SAT for y=0
     # Grab parameters from operators to vectors
     (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh, D2y, D2z) = params
 
@@ -201,7 +203,7 @@ function p_f(params, x, t)
 end
 
 function p_r(params, x, t)
-
+    # Dirichlet SAT for y=Ny
     (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh, D2y, D2z) = params
     
     alpha_r = -13 / dy # params from E + D 2014
@@ -220,29 +222,27 @@ function p_r(params, x, t)
 end
 
 function p_d(params, x, t)
-    (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh,D2y, D2z) = params
-    alpha_d = -1# params from E + D 2014
+    # Dirichlet SAT for z=Nz
+    # Grab parameters from operators to vectors
+    (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh, D2y, D2z) = params
+
+    # Set Constants per Erickson and Dunham 2014
+    alpha_f = -13 / dz
     beta = 1
 
-    # Make it easier to grab a given u or v
+    # Massage UV vector so this is a bit easier to work with
     u_res = zeros(Ny+1, Nz+1)
     v_res = zeros(Ny+1, Nz+1)
-
     convert!(x, y_mesh, z_mesh, u_res, v_res)
 
-    t1 = alpha_d .* kron(Iy, HIz) * Ed # get first term
-
-
-    # do second term here to get easier indexing
-
-    temp = zeros(2*(Ny+1) * (Nz+1))
-    temp[1: ((Ny+1)*(Nz+1))] = kron(Iy, BSz)*x[1:((Ny+1)*(Nz+1))]
-    convert!(temp, y_mesh, z_mesh, u_res, v_res) # The mu kron(Iz BSz * u) term
-
-    t2 = u_res[:, end] - g_prime(z_mesh[end], y_mesh, t)
-    return dz .* t1 * t2
+    # First term in the sum
+    t1 = alpha_f * kron(Iy, HIz) * Ef * (u_res[:, end] - g(z_mesh[end], y_mesh, t))
+    t2 = beta * kron(Iy, HIz) * transpose(kron(Iy, BSz)) * Es * (u_res[:, end] - g(z_mesh[end], y_mesh, t))
+    #return zeros(length(t1))
+    return t1 + t2 .* dz
 end
 
+"""
 function p_s(params, x, t)
 
     (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh, D2y, D2z) = params
@@ -264,12 +264,34 @@ function p_s(params, x, t)
 
     t2 = u_res[:, 1] + g_prime(z_mesh[1], y_mesh, t)
 
-
-
     return dz .* t1 * t2
     # return t1 + t2
 
 end
+"""
+
+function p_s(params, x, t)
+
+     # Grab parameters from operators to vectors
+     (mu, HIy, HIz, Iy, Iz, Ef, Er, Es, Ed, BSy, BSz, dy, dz, Ny, Nz, y_mesh, z_mesh, D2y, D2z) = params
+
+     # Set Constants per Erickson and Dunham 2014
+     alpha_f = -13 / dz
+     beta = 1
+ 
+     # Massage UV vector so this is a bit easier to work with
+     u_res = zeros(Ny+1, Nz+1)
+     v_res = zeros(Ny+1, Nz+1)
+     convert!(x, y_mesh, z_mesh, u_res, v_res)
+ 
+     # First term in the sum
+     t1 = alpha_f * kron(Iy, HIz) * Ef * (u_res[:, 1] - g(z_mesh[1], y_mesh, t))
+     t2 = beta *  kron(Iy, HIz) * transpose(kron(Iy, BSz)) * Es * (u_res[:, 1] - g(z_mesh[1], y_mesh, t))
+     #return zeros(length(t1))
+     return t1 + t2 .* dz
+
+end
+
 
 function rhs(t, x, params)
     # Total right hand side of our ODEs
@@ -279,7 +301,7 @@ function rhs(t, x, params)
     v = x[N+1:2*N]
     b = zeros(2 * N)
     b[1:N] = v # move u = v part
-    b[N+1:2*N] = C^2 .* (((D2y + D2z) * u) + p_f(params, x, t) + p_r(params, x, t) + p_s(params, x, t) + p_d(params, x, t)) + source_term(t, y_mesh, z_mesh)# update v with sbp
+    b[N+1:2*N] = C^2 .* ((D2y + D2z) * u) + p_f(params, x, t) + p_r(params, x, t) + p_s(params, x, t) + p_d(params, x, t) + source_term(t, y_mesh, z_mesh)# update v with sbp
     return b
 end
 
@@ -294,8 +316,8 @@ function run()
     YN = 5
     ZN = 5
 
-    DY = 0.125
-    DZ = 0.125
+    DY = 0.0625
+    DZ = 0.0625
 
     Y_GRID = 0:DY:YN
     Z_GRID = 0:DZ:ZN
@@ -307,7 +329,7 @@ function run()
     # Time
     A = 0
     B = 1
-    DT = 0.00001
+    DT = 0.0001
 
     T_GRID = A:DT:B
     NT = length(T_GRID)
@@ -361,8 +383,8 @@ function run()
     plot!(Z_GRID, [sin(C*(z + Y_GRID[end]) + T_GRID[end]) for z in Z_GRID], label="Exact" )
     png("2D Test YN Z TEND")
 
-    plot(Y_GRID, v[:, end], label = "Numerical")
-    plot!(Y_GRID, [C*cos(C*(z + Z_GRID[end]) + T_GRID[end]) for z in Y_GRID], label="Exact" )
+    plot(Y_GRID, u[:, end], label = "Numerical")
+    plot!(Y_GRID, [sin(C*(z + Z_GRID[end]) + T_GRID[end]) for z in Y_GRID], label="Exact" )
     png("2D ZN Y Plot TEND")
 
     test = zeros(div(length(result[:, end]), 2))
